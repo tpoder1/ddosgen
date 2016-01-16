@@ -41,6 +41,7 @@ typedef struct opts_s {
 
 	int debug;
 	int threads;
+	unsigned long pps;
 	udp_pkt_t pkt;
 	int snd_sock;
 	pthread_mutex_t mutex;
@@ -58,12 +59,13 @@ void usage(void) {
 	printf("Usage:\n");
 	printf("ddosgen -i <input_interface> -o <output_interface> [ -p ]  [ -s ] [ -t <ttl> ] <group> [ <group> [ ... ] ]\n");
 	printf(" -s : src ip\n");
-	printf(" -d : dst  ip\n");
+	printf(" -d : dst ip\n");
 	printf(" -S : src port\n");
 	printf(" -D : dst port\n");
-	printf(" -l : packet length\n");
+	printf(" -l : packet length (including ip and udp header)\n");
 	printf(" -t : number of threads\n");
 	printf(" -r : refresh statistics every n secs \n");
+	printf(" -p : packets per seconds\n");
 	exit(1);
 }
 
@@ -164,6 +166,7 @@ int get_if(char *if_str, char *if_namep, struct in_addr *if_addrp) {
 int sock_init(opts_t *opts) {
 
 	u_int yes = 1;
+	int bufsize = 50000000;
 
 	if ((opts->snd_sock=socket(AF_INET, SOCK_RAW, IPPROTO_RAW)) < 0) {   
 		perror("snd_pim_sock socket");
@@ -171,8 +174,13 @@ int sock_init(opts_t *opts) {
 	}
 
 	if (setsockopt(opts->snd_sock, IPPROTO_IP, IP_HDRINCL,(char *)&yes, sizeof(yes)) < 0 ) {
-		perror("setsockopt IP_HDRINCL (pim_sock)");
+		perror("setsockopt IP_HDRINCL");
 		return 0;	
+	}
+
+	if (setsockopt(opts->snd_sock, SOL_SOCKET, SO_SNDBUF,  &bufsize, sizeof(bufsize)) < 0 ) { 
+		perror("setsockopt SO_SNDBUF");
+		return 0;
 	}
 
 	return 1;
@@ -210,6 +218,9 @@ void *gen_pkt_loop(opts_t *opts) {
 	udp_pkt_t udpp;
 	struct sockaddr_in dst_addr;
 	int pkts = 0;
+	int stats_refresh = 0;
+	struct timespec ts;
+	int pktlen = 0;
 	
 	bzero(&udpp, sizeof(udpp));
 	memcpy(&udpp, &opts->pkt, sizeof(udp_pkt_t));
@@ -217,30 +228,42 @@ void *gen_pkt_loop(opts_t *opts) {
 	udpp.ip.ip_hl     = 0x5;
 	udpp.ip.ip_ttl    = 0x16;
 	udpp.ip.ip_p      = IPPROTO_UDP;
-	udpp.ip.ip_len    = 100;
+	udpp.ip.ip_len    = htons(udpp.udp.uh_ulen + sizeof(struct udphdr));
 	udpp.udp.uh_sum 	= htons(0x0000);
+	pktlen = udpp.udp.uh_ulen + sizeof(struct udphdr) + sizeof(struct iphdr);
+	udpp.udp.uh_ulen    = htons(udpp.udp.uh_ulen);
+
 
 	memset(&dst_addr, 0, sizeof(dst_addr));
 	dst_addr.sin_family			= AF_INET;
-	dst_addr.sin_addr.s_addr	= inet_addr(PIM_HELLO_GROUP);
-	dst_addr.sin_port			= htons(0);
+	dst_addr.sin_addr.s_addr	= udpp.ip.ip_dst.s_addr;;
+	dst_addr.sin_port			= udpp.udp.uh_dport;
+
+	/* determine delay between packets */
+	stats_refresh = opts->pps / opts->threads / 5;
+	ts.tv_sec = 0;
+	if (opts->pps > 0) {
+		ts.tv_nsec = 1000000000 / opts->pps * stats_refresh * opts->threads;
+	}
 
 
 	while (1) {
-		if (sendto(opts->snd_sock, (char *)&udpp, udpp.ip.ip_len, 0, (struct sockaddr *)&dst_addr, sizeof(dst_addr)) < 0 ) {
+		if (sendto(opts->snd_sock, (char *)&udpp, pktlen, 0, (struct sockaddr *)&dst_addr, sizeof(dst_addr)) < 0 ) {
 			perror("udp_sendto");
 		} 
 		if (opts->debug) { printf("UDP sent \n"); }
 
-		if (pkts > 10000) {
+		if (pkts >= stats_refresh ) {
 			pthread_mutex_lock(&opts->mutex);
 			opts->pkts_send += pkts;
-			opts->bytes_send += pkts * udpp.ip.ip_len;
+			opts->bytes_send += pkts * pktlen;
 			pthread_mutex_unlock(&opts->mutex);
 			pkts = 0;
+			if (opts->pps > 0) {
+				nanosleep(&ts, NULL);
+			}
 		}
 		pkts++;
-		//usleep(PIM_HELLO_INTERVAL);
 	}
 }
 
@@ -261,17 +284,19 @@ int main(int argc, char *argv[]) {
 
 	opts.threads = 1;
 	opts.refresh = 1;
+	opts.pps = 100;
 
 
 	/* parse input parameters */
-	while ((op = getopt(argc, argv, "?vs:d:S:D:l:c:t:r:")) != -1) {
+	while ((op = getopt(argc, argv, "?vs:d:S:D:l:c:t:r:p:")) != -1) {
 		switch (op) {
 			case 's': inet_aton(optarg, &opts.pkt.ip.ip_src); break;
 			case 'd': inet_aton(optarg, &opts.pkt.ip.ip_dst); break;
 			case 'S': opts.pkt.udp.uh_sport = htons(atoi(optarg)); break;
 			case 'D': opts.pkt.udp.uh_dport = htons(atoi(optarg)); break;
-			case 'l': opts.pkt.udp.uh_ulen = htons(atoi(optarg)); break;
+			case 'l': opts.pkt.udp.uh_ulen = atoi(optarg); break;
 			case 'c': strcpy(opts.pkt.data, optarg); break;
+			case 'p': opts.pps = atoi(optarg); break;
 			case 'v': opts.debug = 1; break;
 			case 't': 
 					opts.threads = atoi(optarg); 
