@@ -27,6 +27,8 @@
 #define PIM_HELLO_INTERVAL 1
 #define VERSION "2012-02-17.01"
 #define MAX_DATA_SIZE 2000
+#define PORT_OFFSET 1024
+#define NUM_PORTS 60000 
 
 //int debug = 0;						/* 1 = debug mode */
 pthread_t thread, pim_thread;		/* pim hello thread */
@@ -57,11 +59,11 @@ typedef struct opts_s {
 void usage(void) {
 	printf("DDoS generator %s\n", VERSION);
 	printf("Usage:\n");
-	printf("ddosgen -i <input_interface> -o <output_interface> [ -p ]  [ -s ] [ -t <ttl> ] <group> [ <group> [ ... ] ]\n");
+	printf("ddosgen <options>\n");
 	printf(" -s : src ip\n");
 	printf(" -d : dst ip\n");
 	printf(" -S : src port\n");
-	printf(" -D : dst port\n");
+	printf(" -D : dst port (0 - ports from range 1024-65000)\n");
 	printf(" -l : packet length (including ip and udp header)\n");
 	printf(" -t : number of threads\n");
 	printf(" -r : refresh statistics every n secs \n");
@@ -218,6 +220,7 @@ void *gen_pkt_loop(opts_t *opts) {
 	udp_pkt_t udpp;
 	struct sockaddr_in dst_addr;
 	int pkts = 0;
+	unsigned long pkts_total = 0;
 	int stats_refresh = 0;
 	struct timespec ts;
 	int pktlen = 0;
@@ -232,6 +235,11 @@ void *gen_pkt_loop(opts_t *opts) {
 	udpp.udp.uh_sum 	= htons(0x0000);
 	pktlen = udpp.udp.uh_ulen + sizeof(struct udphdr) + sizeof(struct iphdr);
 	udpp.udp.uh_ulen    = htons(udpp.udp.uh_ulen);
+
+	/* prepare ports */
+	if (opts->pkt.udp.uh_dport == 0) {
+		udpp.udp.uh_dport = htons(PORT_OFFSET);
+	}
 
 
 	memset(&dst_addr, 0, sizeof(dst_addr));
@@ -253,6 +261,11 @@ void *gen_pkt_loop(opts_t *opts) {
 		} 
 		if (opts->debug) { printf("UDP sent \n"); }
 
+		/* prepare ports */
+		if (opts->pkt.udp.uh_dport == 0) {
+			udpp.udp.uh_dport = htons(PORT_OFFSET + (pkts_total % NUM_PORTS));
+		}
+
 		if (pkts >= stats_refresh ) {
 			pthread_mutex_lock(&opts->mutex);
 			opts->pkts_send += pkts;
@@ -264,6 +277,7 @@ void *gen_pkt_loop(opts_t *opts) {
 			}
 		}
 		pkts++;
+		pkts_total++;
 	}
 }
 
