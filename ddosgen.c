@@ -46,6 +46,7 @@ typedef struct opts_s {
 	unsigned long pps;
 	udp_pkt_t pkt;
 	int snd_sock;
+	int bufsize;
 	pthread_mutex_t mutex;
 
 	unsigned long pkts_send;
@@ -68,6 +69,7 @@ void usage(void) {
 	printf(" -t : number of threads\n");
 	printf(" -r : refresh statistics every n secs \n");
 	printf(" -p : packets per seconds\n");
+	printf(" -B : set send buffer size (default 50KB)\n");
 	exit(1);
 }
 
@@ -168,7 +170,6 @@ int get_if(char *if_str, char *if_namep, struct in_addr *if_addrp) {
 int sock_init(opts_t *opts) {
 
 	u_int yes = 1;
-	int bufsize = 50000000;
 
 	if ((opts->snd_sock=socket(AF_INET, SOCK_RAW, IPPROTO_RAW)) < 0) {   
 		perror("snd_pim_sock socket");
@@ -180,7 +181,7 @@ int sock_init(opts_t *opts) {
 		return 0;	
 	}
 
-	if (setsockopt(opts->snd_sock, SOL_SOCKET, SO_SNDBUF,  &bufsize, sizeof(bufsize)) < 0 ) { 
+	if (setsockopt(opts->snd_sock, SOL_SOCKET, SO_SNDBUF,  &opts->bufsize, sizeof(opts->bufsize)) < 0 ) { 
 		perror("setsockopt SO_SNDBUF");
 		return 0;
 	}
@@ -254,7 +255,6 @@ void *gen_pkt_loop(opts_t *opts) {
 		ts.tv_nsec = 1000000000 / opts->pps * stats_refresh * opts->threads;
 	}
 
-
 	while (1) {
 		if (sendto(opts->snd_sock, (char *)&udpp, pktlen, 0, (struct sockaddr *)&dst_addr, sizeof(dst_addr)) < 0 ) {
 			perror("udp_sendto");
@@ -299,10 +299,11 @@ int main(int argc, char *argv[]) {
 	opts.threads = 1;
 	opts.refresh = 1;
 	opts.pps = 100;
+	opts.bufsize = 50 * 1024;
 
 
 	/* parse input parameters */
-	while ((op = getopt(argc, argv, "?vs:d:S:D:l:c:t:r:p:")) != -1) {
+	while ((op = getopt(argc, argv, "?vs:d:S:D:l:c:t:r:p:B:")) != -1) {
 		switch (op) {
 			case 's': inet_aton(optarg, &opts.pkt.ip.ip_src); break;
 			case 'd': inet_aton(optarg, &opts.pkt.ip.ip_dst); break;
@@ -311,6 +312,7 @@ int main(int argc, char *argv[]) {
 			case 'l': opts.pkt.udp.uh_ulen = atoi(optarg); break;
 			case 'c': strcpy(opts.pkt.data, optarg); break;
 			case 'p': opts.pps = atoi(optarg); break;
+			case 'B': opts.bufsize = atoi(optarg); break;
 			case 'v': opts.debug = 1; break;
 			case 't': 
 					opts.threads = atoi(optarg); 
