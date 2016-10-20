@@ -16,7 +16,6 @@
 #include <netinet/if_ether.h>
 #include <arpa/inet.h>
 #include <ifaddrs.h>
-#include <pcap.h>
 #include <pthread.h>
 #include <time.h>
 

@@ -2,7 +2,7 @@
 distdir = ddosgen-0.1
 
 main:
-	gcc -lpcap -pthread -O3 -Wall -o ddosgen ddosgen.c 
+	gcc -pthread -O3 -Wall -o ddosgen ddosgen.c 
 
 clean:
 	rm mcrep
